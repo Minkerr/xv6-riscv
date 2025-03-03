@@ -8,13 +8,18 @@ int is_digit(char c) {
     return (c >= '0' && c <= '9');
 }
 
-int is_valid_number(const char *str) {
+int is_valid_number(const char *str, int max_digits) {
     if (*str == '-') {
         str++; 
     }
+    int digit_count = 0;
     while (*str) {
         if (!is_digit(*str) && *str != '\0') {
             return 0; 
+        }
+        digit_count++;
+        if (digit_count > max_digits) {
+            return 0;
         }
         str++;
     }
@@ -31,13 +36,40 @@ main(int argc, char *argv[])
 
     printf("Enter two numbers: ");
 
-    n = read(0, buf, sizeof(buf) - 1);
-    if (n < 0) {
-        printf("Read error. Code: %d\n", n);
-        exit(-2);
+    int t = 0;
+    int newline = 0;
+
+    while (t < sizeof(buf) - 1) {
+        n = read(0, buf + t, sizeof(buf) - 1 - t);
+        
+        if (n < 0) {
+            printf("Read error. Code: %d\n", n);
+            exit(-2);
+        }
+        
+        if (n == 0) {
+            break;
+        }
+        
+        for (int i = 0; i < n; i++) {
+            if (buf[t + i] == '\n') {
+                newline = 1;
+                t += i + 1;
+                break;
+            }
+        }
+        
+        if (newline) {
+            break;
+        }
+        t += n;
     }
 
-    buf[n - 1] = '\0';
+    if (newline) {
+        buf[t - 1] = '\0'; 
+    } else {
+        buf[t] = '\0'; 
+    }
 
     char *space_ptr = buf;
     while (*space_ptr != ' ' && *space_ptr != '\0') {
@@ -53,8 +85,8 @@ main(int argc, char *argv[])
     char *first_num = buf;
     char *second_num = space_ptr + 1;
 
-    if (!is_valid_number(first_num) && !is_valid_number(second_num)) {
-        printf("Incorrect Input. Enter two numbers separated by a space.\n");
+    if (!is_valid_number(first_num, 10) && !is_valid_number(second_num, 10)) {
+        printf("Incorrect Input. Enter two int numbers separated by a space.\n");
         exit(-1);
     }
 
