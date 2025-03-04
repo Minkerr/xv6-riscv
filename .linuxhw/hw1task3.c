@@ -5,6 +5,7 @@
 #include <string.h>
 
 #define BUFFER_SIZE 1024
+char buffer[BUFFER_SIZE];
 
 // tested on mac os
 
@@ -40,7 +41,6 @@ int main(int argc, char *argv[]) {
     } else { 
         close(pipefd[1]); 
 
-        char buffer[BUFFER_SIZE];
         ssize_t bytes_read;
 
         while ((bytes_read = read(pipefd[0], buffer, BUFFER_SIZE))) {

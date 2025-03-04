@@ -7,6 +7,11 @@ main(int argc, char *argv[])
 {
   int pid = fork();
 
+  if (pid < 0) {
+    printf("fork has failed");
+    exit(-1);
+  }
+
   if (pid == 0) { 
 
     printf("Child is sleeping for 10 seconds\n");
@@ -14,6 +19,7 @@ main(int argc, char *argv[])
     exit(1);
 
   } else { 
+
       printf("Parent pid: %d\n", getpid());
       printf("Child pid: %d\n", pid);
       
