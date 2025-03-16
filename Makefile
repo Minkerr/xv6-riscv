@@ -139,7 +139,9 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
-	$U/_hello
+	$U/_hw1task1a\
+	$U/_hw1task1b\
+	$U/_hw1task2
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)
