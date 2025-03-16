@@ -20,22 +20,31 @@ main(int argc, char *argv[])
     int pid = fork();
 
     if (pid < 0) {
-        printf("fork has failed");
-        exit(-1);
+        printf("fork has failed\n");
+        exit(1);
     }
     
-
     if (pid == 0) {  
-        close(pipefd[1]);  
-        close(0);
+
+        if (close(pipefd[1]) < 0) {
+            printf("failed to close write end\n");
+            exit(1);
+        }
+        
+        if (close(0) < 0) {
+            printf("failed to close stdin\n");
+            exit(1);
+        }
         
         if (dup(pipefd[0]) != 0) {
             printf("dup has failed\n");
             exit(1);
         }
         
-        close(pipefd[0]);
-
+        if (close(pipefd[0]) < 0) {
+            printf("failed to close pipefd[0]\n");
+            exit(1);
+        }
 
         char *args[] = { "wc", 0 };
         exec("/wc", args);
@@ -45,31 +54,50 @@ main(int argc, char *argv[])
     } 
     else { 
 
-        close(pipefd[0]);
+        if (close(pipefd[0]) < 0) {
+            printf("failed to close read end\n");
+            exit(1);
+        }
         
         for (i = 1; i < argc; i++) {
-
             len = strlen(argv[i]);
-
-            if (len >= MAX_LEN) {
+            if (len >= MAX_LEN - 1) {  
                 printf("argument is too long\n");
-                close(pipefd[1]);
+                if (close(pipefd[1]) < 0) {
+                    printf("failed to close pipe after error\n");
+                }
                 wait(&status);
                 exit(1);
             }
             
-            strcpy(buf, argv[i]);
+            
+            memcpy(buf, argv[i], len);
             buf[len] = '\n';
-
-            if (write(pipefd[1], buf, len + 1) != len + 1) {
-                printf("write has failed\n");
-                close(pipefd[1]);
-                wait(&status);
-                exit(1);
+            
+            
+            int remaining = len + 1;
+            char *p = buf;
+            while (remaining > 0) {
+                int written = write(pipefd[1], p, remaining);
+                if (written < 0) {
+                    printf("write error\n");
+                    if (close(pipefd[1]) < 0) {
+                        printf("failed to close pipe after error\n");
+                    }
+                    wait(&status);
+                    exit(1);
+                }
+                remaining -= written;
+                p += written;
             }
         }
         
-        close(pipefd[1]);
+        if (close(pipefd[1]) < 0) {
+            printf("failed to close write end in parent\n");
+            wait(&status);
+            exit(1);
+        }
+        
         wait(&status);
         exit(0);
     }
