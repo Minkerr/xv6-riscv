@@ -18,29 +18,34 @@ sys_ps_listinfo(void) {
     int lim_arg;
     struct procinfo *plist;
     struct proc *p = myproc();
+    uint64 total = 0;
     uint64 copied = 0;
 
     argint(0, &addr_arg);
     argint(1, &lim_arg);
 
-    if (addr_arg == 0) {
-        for (int i = 0; i < NPROC; i++) {
-            acquire(&proc[i].lock);
-            if (proc[i].state != UNUSED) copied++;
-            release(&proc[i].lock);
+    for (int i = 0; i < NPROC; i++) {
+        acquire(&proc[i].lock);
+        if (proc[i].state != UNUSED && proc[i].state != USED) {
+            total++;
         }
-        return copied;
+        release(&proc[i].lock);
+    }
+
+    if (addr_arg == 0) {
+        return total;
     }
 
     plist = (struct procinfo*)((uint64)addr_arg);
     if (lim_arg <= 0 || (uint64)plist >= p->sz || 
-        (uint64)plist + sizeof(struct procinfo)*lim_arg > p->sz) {
+        (uint64)plist + sizeof(struct procinfo)*lim_arg > p->sz || 
+        (uint64)lim_arg < total) {
         return -1;
     }
 
-    for (int i = 0; i < NPROC && copied < (uint64)lim_arg; i++) {
+    for (int i = 0; i < NPROC && copied < total; i++) {
         acquire(&proc[i].lock);
-        if (proc[i].state == UNUSED) {
+        if (proc[i].state == UNUSED || proc[i].state == USED) {
             release(&proc[i].lock);
             continue;
         }
@@ -50,9 +55,14 @@ sys_ps_listinfo(void) {
         safestrcpy(info.name, proc[i].name, sizeof(info.name));
         info.state = proc[i].state;
 
-        acquire(&wait_lock);
-        info.ppid = proc[i].parent ? proc[i].parent->pid : 0;
-        release(&wait_lock);
+        struct proc *parent = proc[i].parent;
+        if (parent) {
+            acquire(&parent->lock);
+            info.ppid = parent->pid;
+            release(&parent->lock);
+        } else {
+            info.ppid = 0;
+        }
 
         uint64 dest = (uint64)plist + copied * sizeof(struct procinfo);
         if (copyout(p->pagetable, dest, (char*)&info, sizeof(info)) < 0) {
@@ -64,5 +74,5 @@ sys_ps_listinfo(void) {
         release(&proc[i].lock);
     }
 
-    return copied;
+    return total;
 }
