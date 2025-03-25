@@ -503,3 +503,42 @@ sys_pipe(void)
   }
   return 0;
 }
+
+uint64 sys_mutex(void) {
+  struct file *f;
+  if((f = mutexalloc()) == 0) return -1;
+  
+  int fd;
+  if((fd = fdalloc(f)) < 0) {
+    fileclose(f);
+    return -1;
+  }
+  return fd;
+}
+
+uint64 sys_mutex_lock(void) {
+  struct file *f;
+  int fd;
+  if(argfd(0, &fd, &f) < 0 || f->type != FD_MUTEX) return -1;
+  
+  acquiresleep(f->mutex);
+  return 0;
+}
+
+uint64 sys_mutex_unlock(void) {
+  struct file *f;
+  int fd;
+  if(argfd(0, &fd, &f) < 0 || f->type != FD_MUTEX) return -1;
+  
+  struct sleeplock *sl = f->mutex;
+  acquire(&sl->lk);
+  if(sl->locked && sl->pid == myproc()->pid) {
+    sl->locked = 0;
+    sl->pid = 0;
+    wakeup(sl);
+    release(&sl->lk);
+    return 0;
+  }
+  release(&sl->lk);
+  return -1;
+}

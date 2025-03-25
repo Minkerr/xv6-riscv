@@ -41,3 +41,7 @@ void *memcpy(void *, const void *, uint);
 // umalloc.c
 void* malloc(uint);
 void free(void*);
+
+int mutex(void);
+int mutex_lock(int);
+int mutex_unlock(int);
