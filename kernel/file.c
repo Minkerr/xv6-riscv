@@ -80,6 +80,20 @@ fileclose(struct file *f)
     iput(ff.ip);
     end_op();
   }
+
+  if(ff.type == FD_MUTEX) {
+    struct sleeplock *sl = ff.mutex;
+    acquire(&sl->lk);
+
+    if(sl->locked && sl->pid == myproc()->pid) {
+      sl->locked = 0;
+      sl->pid = 0;
+      wakeup(sl);
+    }
+
+    release(&sl->lk);
+    mutexclose(&ff);
+  }
 }
 
 // Get metadata about file f.
@@ -107,6 +121,8 @@ int
 fileread(struct file *f, uint64 addr, int n)
 {
   int r = 0;
+  
+  if(f->type == FD_MUTEX) return -1;
 
   if(f->readable == 0)
     return -1;
@@ -135,6 +151,8 @@ int
 filewrite(struct file *f, uint64 addr, int n)
 {
   int r, ret = 0;
+
+  if(f->type == FD_MUTEX) return -1;
 
   if(f->writable == 0)
     return -1;
