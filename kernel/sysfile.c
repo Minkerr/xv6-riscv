@@ -520,7 +520,8 @@ uint64 sys_mutex_lock(void) {
   struct file *f;
   int fd;
   if(argfd(0, &fd, &f) < 0 || f->type != FD_MUTEX) return -1;
-  
+
+  printf("process %d acquiring mutex#%d\n", myproc()->pid, f->mutex->mid);
   acquiresleep(f->mutex);
   return 0;
 }
@@ -529,7 +530,8 @@ uint64 sys_mutex_unlock(void) {
   struct file *f;
   int fd;
   if(argfd(0, &fd, &f) < 0 || f->type != FD_MUTEX) return -1;
-  
+
+  printf("process %d releasing mutex#%d\n", myproc()->pid, f->mutex->mid);
   struct sleeplock *sl = f->mutex;
   acquire(&sl->lk);
   if(sl->locked && sl->pid == myproc()->pid) {

@@ -60,39 +60,46 @@ void
 fileclose(struct file *f)
 {
   struct file ff;
-
   acquire(&ftable.lock);
   if(f->ref < 1)
     panic("fileclose");
-  if(--f->ref > 0){
-    release(&ftable.lock);
-    return;
-  }
-  ff = *f;
-  f->ref = 0;
-  f->type = FD_NONE;
-  release(&ftable.lock);
 
-  if(ff.type == FD_PIPE){
-    pipeclose(ff.pipe, ff.writable);
-  } else if(ff.type == FD_INODE || ff.type == FD_DEVICE){
-    begin_op();
-    iput(ff.ip);
-    end_op();
-  }
-
-  if(ff.type == FD_MUTEX) {
-    struct sleeplock *sl = ff.mutex;
+  if(f->type == FD_MUTEX) {
+    struct sleeplock *sl = (struct sleeplock*)f->mutex;
     acquire(&sl->lk);
-
     if(sl->locked && sl->pid == myproc()->pid) {
       sl->locked = 0;
       sl->pid = 0;
       wakeup(sl);
     }
-
     release(&sl->lk);
-    mutexclose(&ff);
+  }
+
+  if(--f->ref > 0) {
+    release(&ftable.lock);
+    return;
+  }
+
+  ff = *f;
+  f->ref = 0;
+  f->type = FD_NONE;
+  release(&ftable.lock);
+
+  switch(ff.type) {
+    case FD_PIPE:
+      pipeclose(ff.pipe, ff.writable);
+      break;
+    case FD_INODE:
+    case FD_DEVICE:
+      begin_op();
+      iput(ff.ip);
+      end_op();
+      break;
+    case FD_MUTEX:
+      mutexclose(&ff);
+      break;
+    default:
+      break;
   }
 }
 
