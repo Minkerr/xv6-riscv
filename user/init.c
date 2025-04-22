@@ -8,6 +8,7 @@
 #include "kernel/file.h"
 #include "user/user.h"
 #include "kernel/fcntl.h"
+#include "kernel/device.h"
 
 char *argv[] = { "sh", 0 };
 
@@ -17,11 +18,16 @@ main(void)
   int pid, wpid;
 
   if(open("console", O_RDWR) < 0){
-    mknod("console", CONSOLE, 0);
+    mknod("console", T_DEVICE, CONSOLE, 0);
     open("console", O_RDWR);
   }
   dup(0);  // stdout
   dup(0);  // stderr
+
+  mknod("/null", T_DEVICE, 2, PSEUDO_NULL);
+  mknod("/zero", T_DEVICE, 2, PSEUDO_ZERO);
+  mknod("/urandom", T_DEVICE, 2, PSEUDO_URANDOM);
+  mknod("/nullstat", T_DEVICE, 2, PSEUDO_NULLSTAT);
 
   for(;;){
     printf("init: starting sh\n");

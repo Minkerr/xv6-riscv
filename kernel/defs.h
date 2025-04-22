@@ -187,3 +187,11 @@ void            virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+
+void proc_mapstacks(pagetable_t);
+void proc_freepagetable(pagetable_t, uint64);
+
+void            pseudoinit(void);
+
+pagetable_t     proc_pagetable(struct proc*);
