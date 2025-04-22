@@ -15,6 +15,18 @@
 #define DEFAULT_LOG "/tmp/echo_server.log"
 #define DEFAULT_ALARM_INTERVAL 5
 #define BUFFER_SIZE 4096
+#define CHECK_ERROR(expr, msg) do { \
+    if ((expr) == -1) { \
+        perror(msg); \
+        exit(EXIT_FAILURE); \
+    } \
+} while(0)
+#define CHECK_PTR(ptr, msg) do { \
+    if ((ptr) == NULL) { \
+        perror(msg); \
+        exit(EXIT_FAILURE); \
+    } \
+} while(0)
 
 static volatile sig_atomic_t shutdown_flag = 0;
 static volatile sig_atomic_t alarm_triggered = 0;
@@ -31,6 +43,9 @@ static bool is_daemon = false;
 static bool is_foreground = true;
 static FILE *log_stream;
 
+void daemonize();
+void print_stats();
+
 void cleanup() {
     unlink(fifo_name);
 }
@@ -44,22 +59,27 @@ void log_message(const char *msg) {
 }
 
 void handle_sigterm(int sig) {
+    (void)sig;
     shutdown_flag = 1;
 }
 
 void handle_sigint(int sig) {
+    (void)sig;
     shutdown_flag = 2;
 }
 
 void handle_sigalrm(int sig) {
+    (void)sig;
     alarm_triggered = 1;
 }
 
 void handle_sigusr1(int sig) {
+    (void)sig;
     stats_requested = 1;
 }
 
 void handle_sighup(int sig) {
+    (void)sig;
     if (is_foreground) {
         daemonize_flag = 1;
     }
@@ -71,59 +91,75 @@ void setup_signals() {
     sa.sa_handler = handle_sigterm;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
-    sigaction(SIGTERM, &sa, NULL);
+    CHECK_ERROR(sigaction(SIGTERM, &sa, NULL), "sigaction SIGTERM");
 
     sa.sa_handler = handle_sigint;
-    sigaction(SIGINT, &sa, NULL);
+    CHECK_ERROR(sigaction(SIGINT, &sa, NULL), "sigaction SIGTERM");
 
     sa.sa_handler = SIG_IGN;
-    sigaction(SIGQUIT, &sa, NULL);
+    CHECK_ERROR(sigaction(SIGQUIT, &sa, NULL), "sigaction SIGTERM");
 
     sa.sa_handler = handle_sigalrm;
-    sigaction(SIGALRM, &sa, NULL);
+    CHECK_ERROR(sigaction(SIGALRM, &sa, NULL), "sigaction SIGTERM");
 
     sa.sa_handler = handle_sigusr1;
-    sigaction(SIGUSR1, &sa, NULL);
+    CHECK_ERROR(sigaction(SIGUSR1, &sa, NULL), "sigaction SIGTERM");
 
     sa.sa_handler = handle_sighup;
-    sigaction(SIGHUP, &sa, NULL);
+    CHECK_ERROR(sigaction(SIGHUP, &sa, NULL), "sigaction SIGTERM");
+}
+
+void check_flags() {
+    if (shutdown_flag) {
+        log_message("Shutdown signal received");
+        exit(EXIT_SUCCESS);
+    }
+    
+    if (alarm_triggered) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Alarm: %lu seconds active", alarms);
+        log_message(msg);
+        alarm_triggered = 0;
+        alarm(alarm_interval);
+    }
+    
+    if (stats_requested) {
+        print_stats();
+        stats_requested = 0;
+    }
+    
+    if (daemonize_flag) {
+        daemonize();
+        daemonize_flag = 0;
+    }
 }
 
 void daemonize() {
+    if (is_daemon) return;
     pid_t pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        exit(EXIT_FAILURE);
-    }
+    CHECK_ERROR(pid, "fork");
+    if (pid > 0) exit(EXIT_SUCCESS); 
+
+    CHECK_ERROR(setsid(), "setsid");
+
+    pid = fork();
+    CHECK_ERROR(pid, "fork");
     if (pid > 0) exit(EXIT_SUCCESS);
 
-    if (setsid() < 0) {
-        perror("setsid");
-        exit(EXIT_FAILURE);
-    }
-
-    chdir("/");
     close(STDIN_FILENO);
     close(STDOUT_FILENO);
     close(STDERR_FILENO);
 
     int fd = open(log_file, O_WRONLY | O_CREAT | O_APPEND, 0600);
-    if (fd == -1) {
-        perror("open");
-        exit(EXIT_FAILURE);
-    }
+    CHECK_ERROR(fd, "open log");
     dup2(fd, STDOUT_FILENO);
     dup2(fd, STDERR_FILENO);
     close(fd);
 
-    log_stream = fopen(log_file, "a");
-    if (!log_stream) {
-        perror("fopen");
-        exit(EXIT_FAILURE);
-    }
+    log_stream = fdopen(STDOUT_FILENO, "a");
+    CHECK_PTR(log_stream, "fdopen");
 
     is_daemon = true;
-    is_foreground = false;
     log_message("Daemonized via SIGHUP");
 }
 
@@ -183,46 +219,31 @@ int main(int argc, char *argv[]) {
     alarm(alarm_interval);
 
     while (!shutdown_flag) {
-        if (daemonize_flag) {
-            daemonize();
-            daemonize_flag = 0;
-        }
+        check_flags();
 
         int fifo_fd;
         do {
             fifo_fd = open(fifo_name, O_RDONLY);
             if (fifo_fd == -1) {
                 if (errno == EINTR) {
-                    if (shutdown_flag) break;
-                    if (alarm_triggered) {
-                        print_stats();
-                        alarm_triggered = 0;
-                        alarm(alarm_interval);
-                    }
-                } else {
-                    perror("open");
-                    exit(EXIT_FAILURE);
+                    check_flags();
+                    continue;
                 }
+                CHECK_ERROR(-1, "open fifo");
             }
         } while (fifo_fd == -1);
 
         char buffer[BUFFER_SIZE];
         ssize_t bytes_read;
 
-        while ((bytes_read = read(fifo_fd, buffer, BUFFER_SIZE - 1)) != 0) {
+        while ((bytes_read = read(fifo_fd, buffer, BUFFER_SIZE-1)) != 0) {
+            check_flags();
             if (bytes_read == -1) {
                 if (errno == EINTR) {
-                    if (shutdown_flag == 1) break;
-                    if (alarm_triggered) {
-                        print_stats();
-                        alarm_triggered = 0;
-                        alarm(alarm_interval);
-                    }
+                    check_flags();
                     continue;
-                } else {
-                    perror("read");
-                    break;
                 }
+                CHECK_ERROR(-1, "read fifo");
             }
             buffer[bytes_read] = '\0';
             fprintf(log_stream, "%s", buffer);
