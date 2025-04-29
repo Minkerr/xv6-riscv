@@ -91,3 +91,20 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64 sys_rtctime(void) {
+  uint64 time = rtc_read_time();
+  uint64 addr;
+  struct proc *p = myproc();
+  argaddr(0, &addr);
+
+  if (addr < 0) {
+    return -1;
+  }
+
+  if (copyout(p->pagetable, addr, (char *)&time, sizeof(time)) < 0) {
+    return -1;
+  }
+
+  return 0;
+}
