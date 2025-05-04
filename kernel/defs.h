@@ -21,6 +21,8 @@ void            bunpin(struct buf*);
 void            consoleinit(void);
 void            consoleintr(int);
 void            consputc(int);
+int  consoleread(int, uint64, int);
+int  consolewrite(int, uint64, int);
 
 // exec.c
 int             exec(char*, char**);
@@ -187,3 +189,7 @@ void            virtio_disk_intr(void);
 
 // number of elements in fixed-size array
 #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+
+int  devnull_read(int, uint64, int);
+int  devnull_write(int, uint64, int);
+void nulldevinit(void);

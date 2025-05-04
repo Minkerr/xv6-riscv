@@ -51,4 +51,10 @@ main(void)
       }
     }
   }
+
+
+  mknod("null", 3, 0);
+  mknod("zero", 3, 1);
+  mknod("urandom", 3, 2);
+  mknod("nullstat", 3, 3);
 }
