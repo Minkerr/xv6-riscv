@@ -146,10 +146,6 @@ void daemonize() {
     CHECK_ERROR(pid, "fork");
     if (pid > 0) exit(EXIT_SUCCESS);
 
-    close(STDIN_FILENO);
-    close(STDOUT_FILENO);
-    close(STDERR_FILENO);
-
     int fd = open(log_file, O_WRONLY | O_CREAT | O_APPEND, 0600);
     CHECK_ERROR(fd, "open log");
     dup2(fd, STDOUT_FILENO);
@@ -158,9 +154,10 @@ void daemonize() {
 
     log_stream = fdopen(STDOUT_FILENO, "a");
     CHECK_PTR(log_stream, "fdopen");
+    setvbuf(log_stream, NULL, _IONBF, 0); 
 
     is_daemon = true;
-    log_message("Daemonized via SIGHUP");
+    log_message("Daemon initialization complete");
 }
 
 void print_stats() {
@@ -212,7 +209,9 @@ int main(int argc, char *argv[]) {
     if (daemon_mode) {
         daemonize();
     } else {
-        log_stream = stdout;
+        log_stream = fopen(log_file, "a");
+        CHECK_PTR(log_stream, "fopen log");
+        setvbuf(log_stream, NULL, _IONBF, 0); 
     }
 
     setup_signals();

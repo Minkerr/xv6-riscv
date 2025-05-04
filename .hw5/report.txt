@@ -1,0 +1,23 @@
+Сборка:
+gcc -std=c17 .hw5/task.c -o echo_server
+./echo_server -f /tmp/test.fifo -l /tmp/server.log  
+
+Проверка записи:
+echo "Hello World" > /tmp/test.fifo
+cat /tmp/server.log
+
+Проверка завершения:
+ps aux | grep echo_server 
+kill -TERM <PID>
+cat /tmp/server.log
+
+Проверка целостности файла FIFO:
+ls -l /tmp/test.fifo 
+
+Конкурентная запись:
+(echo "Writer1" > /tmp/test.fifo) & (echo "Writer2" > /tmp/test.fifo) & (echo "Writer3" > /tmp/test.fifo)
+cat /tmp/server.log
+
+alarm:
+kill -ALRM $(pgrep -f echo_server)
+cat /tmp/server.log
