@@ -1,121 +1,154 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <string.h>
-#include <errno.h>
+#include <stdio.h>      // Включение стандартной библиотеки ввода-вывода
+#include <stdlib.h>     // Включение стандартной библиотеки для функций exit, malloc и т.д.
+#include <unistd.h>     // Включение библиотеки для системных вызовов POSIX (fork, pipe, read, write)
+#include <sys/wait.h>   // Включение библиотеки для функции waitpid
+#include <string.h>     // Включение библиотеки для функций работы со строками
+#include <errno.h>      // Включение библиотеки для работы с кодами ошибок
 
-#define BUFFER_SIZE 1024
-char buffer[BUFFER_SIZE];
+#define BUFFER_SIZE 1024  // Определение размера буфера для передачи данных
+char buffer[BUFFER_SIZE]; // Буфер для хранения данных, передаваемых через канал
 
+// Комментарий о тестировании на macOS
 // tested on mac os
 
+/**
+ * Вспомогательная функция для вывода сообщения об ошибке и завершения программы
+ * @param msg - сообщение об ошибке
+ */
 void exit_error(const char *msg) {
-    perror(msg);
-    exit(EXIT_FAILURE);
+    perror(msg);              // Выводит сообщение об ошибке и текущее значение errno
+    exit(EXIT_FAILURE);       // Завершает программу с кодом ошибки
 }
 
+/**
+ * Основная функция программы
+ * Создает дочерний процесс и передает ему через анонимный канал все аргументы командной строки,
+ * после чего дочерний процесс выводит полученные данные на стандартный вывод
+ * @param argc - количество аргументов командной строки
+ * @param argv - массив аргументов командной строки
+ * @return код завершения программы
+ */
 int main(int argc, char *argv[]) {
-    int pipefd[2];
-    pid_t pid;
+    int pipefd[2];            // Массив для хранения файловых дескрипторов канала
+    pid_t pid;                // Переменная для хранения идентификатора процесса
 
+    // Проверяем, что программа запущена с аргументами
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <arguments...>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
+    // Создаем анонимный канал с помощью системного вызова pipe()
+    // pipe() заполняет массив pipefd двумя файловыми дескрипторами:
+    // pipefd[0] - для чтения из канала
+    // pipefd[1] - для записи в канал
     if (pipe(pipefd) < 0) {
         exit_error("pipe failed");
     }
 
+    // Создаем дочерний процесс с помощью системного вызова fork()
     if ((pid = fork()) < 0) {
         exit_error("fork failed");
     }
 
+    // Код, выполняемый в родительском процессе
     if (pid > 0) { 
-        
+        // Закрываем конец канала для чтения, так как родительский процесс будет только писать
         if (close(pipefd[0]) < 0) {
             exit_error("close read end failed");
         }
 
+        // Перебираем все аргументы командной строки, начиная с первого (индекс 0 - имя программы)
         for (int i = 1; i < argc; i++) {
-            size_t len = strlen(argv[i]);
+            size_t len = strlen(argv[i]);  // Получаем длину текущего аргумента
             
-            
+            // Проверяем, не превышает ли длина аргумента максимально допустимую
             if (len + 1 >= BUFFER_SIZE) {
                 fprintf(stderr, "Argument too long: %s\n", argv[i]);
-                close(pipefd[1]);
+                close(pipefd[1]);  // Закрываем канал в случае ошибки
                 exit(EXIT_FAILURE);
             }
 
-            
+            // Копируем аргумент в буфер
             memcpy(buffer, argv[i], len);
-            buffer[len] = '\n';
+            buffer[len] = '\n';  // Добавляем символ перевода строки после аргумента
             
-            
-            ssize_t total_written = 0;
+            // Записываем аргумент в канал
+            ssize_t total_written = 0;  // Общее количество записанных байт
+            // Цикл записи данных в канал
+            // Системный вызов write() может записать меньше байт, чем запрошено,
+            // поэтому мы продолжаем запись, пока не запишем все данные
             while (total_written < (len + 1)) {
                 ssize_t written = write(pipefd[1], 
                                        buffer + total_written,
                                        (len + 1) - total_written);
+                // Проверяем, успешно ли выполнена запись
                 if (written < 0) {
+                    // Если запись была прервана сигналом (EINTR), пробуем снова
                     if (errno == EINTR) continue; 
                     perror("write failed");
-                    close(pipefd[1]);
+                    close(pipefd[1]);  // Закрываем канал в случае ошибки
                     exit(EXIT_FAILURE);
                 }
-                total_written += written;
+                total_written += written;  // Увеличиваем счетчик записанных байт
             }
         }
 
-        
+        // Закрываем конец канала для записи, чтобы дочерний процесс получил EOF
         if (close(pipefd[1]) < 0) {
             exit_error("close write end failed");
         }
 
-        
+        // Ожидаем завершения дочернего процесса с помощью системного вызова waitpid()
+        // waitpid() блокирует выполнение родительского процесса до завершения указанного дочернего процесса
         int status;
         if (waitpid(pid, &status, 0) < 0) {
             exit_error("waitpid failed");
         }
 
-    } else { 
-        
+    } else {  // Код, выполняемый в дочернем процессе
+        // Закрываем конец канала для записи, так как дочерний процесс будет только читать
         if (close(pipefd[1]) < 0) {
             exit_error("close write end failed");
         }
 
-        ssize_t bytes_read;
+        ssize_t bytes_read;  // Переменная для хранения количества прочитанных байт
         
+        // Цикл чтения данных из канала
+        // read() возвращает 0 при достижении конца файла (EOF)
         while ((bytes_read = read(pipefd[0], buffer, BUFFER_SIZE)) > 0) {
-            ssize_t total_written = 0;
+            ssize_t total_written = 0;  // Общее количество записанных байт
             
-            
+            // Цикл записи данных на стандартный вывод
+            // Системный вызов write() может записать меньше байт, чем запрошено,
+            // поэтому мы продолжаем запись, пока не запишем все прочитанные данные
             while (total_written < bytes_read) {
                 ssize_t written = write(STDOUT_FILENO, 
-                                        buffer + total_written,
-                                        bytes_read - total_written);
+                                         buffer + total_written,
+                                         bytes_read - total_written);
+                // Проверяем, успешно ли выполнена запись
                 if (written < 0) {
+                    // Если запись была прервана сигналом (EINTR), пробуем снова
                     if (errno == EINTR) continue;
                     exit_error("write to stdout failed");
                 }
-                total_written += written;
+                total_written += written;  // Увеличиваем счетчик записанных байт
             }
         }
 
-        
+        // Проверяем, не произошла ли ошибка при чтении
         if (bytes_read < 0) {
             exit_error("read failed");
         }
 
-        
+        // Закрываем конец канала для чтения
         if (close(pipefd[0]) < 0) {
             exit_error("close read end failed");
         }
 
-        exit(EXIT_SUCCESS);
+        exit(EXIT_SUCCESS);  // Завершаем дочерний процесс с кодом успешного выполнения
     }
 
-    return EXIT_SUCCESS;
+    return EXIT_SUCCESS;  // Завершаем родительский процесс с кодом успешного выполнения
 }
-// .linuxhw/hw1task3.c 
+// .linuxhw/hw1task3.c
