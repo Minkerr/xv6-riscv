@@ -1,26 +1,60 @@
-#include "kernel/types.h"
-#include "kernel/stat.h"
-#include "kernel/riscv.h"
-#include "kernel/param.h"
-#include "kernel/spinlock.h"
-#include "kernel/procinfo.h"
-#include "kernel/proc.h"
-#include "user/user.h"
+/**
+ * @file hw2task2.c
+ * @brief Тестовая программа для системного вызова ps_listinfo
+ * 
+ * Эта программа демонстрирует базовое использование системного вызова ps_listinfo
+ * для получения информации о запущенных процессах в системе.
+ */
+
+#include "kernel/types.h"     // Базовые типы данных
+#include "kernel/stat.h"      // Структуры статистики
+#include "kernel/riscv.h"     // Специфичные для RISC-V определения
+#include "kernel/param.h"     // Параметры системы
+#include "kernel/spinlock.h"  // Спин-блокировки
+#include "kernel/procinfo.h"  // Структура procinfo
+#include "kernel/proc.h"      // Структуры процессов
+#include "user/user.h"        // Пользовательские функции
 
 
+/**
+ * @brief Основная функция программы
+ * 
+ * Демонстрирует использование системного вызова ps_listinfo:
+ * 1. Сначала получает общее количество процессов
+ * 2. Затем получает информацию о всех процессах и выводит ее
+ * 
+ * @return Код завершения программы
+ */
 int main() {
+    // Получаем общее количество процессов
+    // Первый аргумент 0 указывает, что мы хотим только узнать количество процессов
+    // Второй аргумент игнорируется в этом случае
     int cnt = ps_listinfo(0, 0);
     printf("Total processes: %d\n", cnt);
 
+    // Создаем буфер для хранения информации о процессах
+    // Размер буфера достаточно большой, чтобы вместить все процессы
     struct procinfo plist[64];
+    
+    // Получаем информацию о процессах
+    // Первый аргумент - указатель на буфер для хранения информации
+    // Второй аргумент - максимальное количество процессов для записи
     int ret = ps_listinfo(plist, 64);
+    
+    // Проверяем результат вызова
     if (ret < 0) {
+        // Если вернулось отрицательное значение, произошла ошибка
         printf("Error retrieving process list\n");
     } else {
+        // Выводим информацию о каждом процессе
         for (int i = 0; i < ret; i++) {
-            printf("PID: %d, Name: %s, State: %d, PPID: %d\n", plist[i].pid, plist[i].name, plist[i].state, plist[i].ppid);
+            printf("PID: %d, Name: %s, State: %d, PPID: %d\n", 
+                   plist[i].pid,     // Идентификатор процесса
+                   plist[i].name,    // Имя процесса
+                   plist[i].state,   // Состояние процесса
+                   plist[i].ppid);   // Идентификатор родительского процесса
         }
     }
 
-    exit(0);
+    exit(0);  // Завершаем программу с кодом успешного выполнения
 }

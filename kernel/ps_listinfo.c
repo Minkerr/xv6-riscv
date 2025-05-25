@@ -1,87 +1,128 @@
-#include "types.h"
-#include "param.h"
-#include "stat.h"
-#include "memlayout.h"
-#include "riscv.h"
-#include "spinlock.h"
-#include "proc.h"
-#include "defs.h"
-#include "syscall.h"
-#include "procinfo.h"
+/**
+ * @file ps_listinfo.c
+ * @brief Реализация системного вызова ps_listinfo
+ * 
+ * Этот файл содержит реализацию системного вызова ps_listinfo,
+ * который возвращает информацию о запущенных процессах в системе.
+ */
 
-extern struct proc proc[NPROC];
-extern struct spinlock wait_lock;
+#include "types.h"      // Базовые типы данных
+#include "param.h"      // Параметры системы, включая NPROC
+#include "stat.h"       // Структуры статистики
+#include "memlayout.h"  // Макеты памяти
+#include "riscv.h"      // Специфичные для RISC-V определения
+#include "spinlock.h"   // Спин-блокировки
+#include "proc.h"       // Структуры процессов
+#include "defs.h"       // Объявления функций ядра
+#include "syscall.h"    // Определения системных вызовов
+#include "procinfo.h"   // Структура procinfo
 
+// Внешние переменные, определенные в других файлах
+extern struct proc proc[NPROC];     // Массив процессов
+extern struct spinlock wait_lock;   // Блокировка для операций ожидания
+
+/**
+ * @brief Реализация системного вызова ps_listinfo
+ * 
+ * Этот системный вызов возвращает информацию о запущенных процессах в системе.
+ * Если plist равен NULL (0), возвращает количество процессов.
+ * Иначе заполняет массив plist информацией о процессах и возвращает их количество.
+ * 
+ * @return Количество процессов или код ошибки
+ */
 uint64 
 sys_ps_listinfo(void) {
-    int addr_arg;
-    int lim_arg;
-    struct procinfo *plist;
-    struct proc *p = myproc();
-    uint64 total = 0;
-    uint64 copied = 0;
+    int addr_arg;                // Адрес буфера для хранения информации о процессах
+    int lim_arg;                 // Максимальное количество процессов для записи
+    struct procinfo *plist;      // Указатель на буфер в пользовательском пространстве
+    struct proc *p = myproc();   // Получаем текущий процесс
+    uint64 total = 0;            // Общее количество активных процессов
+    uint64 copied = 0;           // Количество процессов, информация о которых была скопирована
 
-    argint(0, &addr_arg);
-    argint(1, &lim_arg);
+    // Получаем аргументы системного вызова
+    argint(0, &addr_arg);        // Первый аргумент - адрес буфера
+    argint(1, &lim_arg);         // Второй аргумент - максимальное количество процессов
 
+    // Если адрес буфера равен NULL, просто подсчитываем количество процессов
     if (addr_arg == 0) {
+        // Проходим по всем возможным процессам
         for (int i = 0; i < NPROC; i++) {
-            acquire(&proc[i].lock);
+            acquire(&proc[i].lock);  // Получаем блокировку процесса
+            // Считаем только активные процессы (не UNUSED и не USED)
             if (proc[i].state != UNUSED && proc[i].state != USED) {
                 total++;
             }
-            release(&proc[i].lock);
+            release(&proc[i].lock);  // Освобождаем блокировку процесса
         }
-        return total;
+        return total;  // Возвращаем общее количество процессов
     }
 
+    // Преобразуем адрес буфера в указатель
     plist = (struct procinfo*)((uint64)addr_arg);
+    
+    // Проверяем валидность буфера
+    // - lim_arg должен быть положительным
+    // - адрес буфера должен быть в пределах адресного пространства процесса
+    // - буфер не должен выходить за пределы адресного пространства процесса
     if (lim_arg <= 0 || (uint64)plist >= p->sz || 
         (uint64)plist + sizeof(struct procinfo)*lim_arg > p->sz) {
-        return -1;
+        return -1;  // Возвращаем ошибку, если буфер невалиден
     }
 
+    // Сбрасываем счетчики
     total = 0;
     copied = 0;
 
+    // Проходим по всем возможным процессам
     for (int i = 0; i < NPROC; i++) {
-        acquire(&proc[i].lock);
+        acquire(&proc[i].lock);  // Получаем блокировку процесса
+        
+        // Пропускаем неактивные процессы
         if (proc[i].state == UNUSED || proc[i].state == USED) {
-            release(&proc[i].lock);
+            release(&proc[i].lock);  // Освобождаем блокировку процесса
             continue;
         }
 
-        total++;
+        total++;  // Увеличиваем счетчик активных процессов
 
+        // Если еще есть место в буфере, копируем информацию о процессе
         if (copied < lim_arg) {
-            struct procinfo info;
-            info.pid = proc[i].pid;
-            safestrcpy(info.name, proc[i].name, sizeof(info.name));
-            info.state = proc[i].state;
+            struct procinfo info;  // Временная структура для хранения информации о процессе
+            
+            // Заполняем структуру информацией о процессе
+            info.pid = proc[i].pid;  // Идентификатор процесса
+            safestrcpy(info.name, proc[i].name, sizeof(info.name));  // Имя процесса
+            info.state = proc[i].state;  // Состояние процесса
 
+            // Получаем информацию о родительском процессе
             struct proc *parent;
-            acquire(&wait_lock);
-            parent = proc[i].parent;
-            release(&wait_lock);
+            acquire(&wait_lock);  // Получаем глобальную блокировку ожидания
+            parent = proc[i].parent;  // Получаем указатель на родительский процесс
+            release(&wait_lock);  // Освобождаем глобальную блокировку ожидания
 
+            // Заполняем идентификатор родительского процесса
             if (parent) {
-                acquire(&parent->lock);
-                info.ppid = parent->pid;
-                release(&parent->lock);
+                acquire(&parent->lock);  // Получаем блокировку родительского процесса
+                info.ppid = parent->pid;  // Идентификатор родительского процесса
+                release(&parent->lock);  // Освобождаем блокировку родительского процесса
             } else {
-                info.ppid = 0;
+                info.ppid = 0;  // Если нет родительского процесса, устанавливаем 0
             }
 
+            // Вычисляем адрес в буфере для записи информации о процессе
             uint64 dest = (uint64)plist + copied * sizeof(struct procinfo);
+            
+            // Копируем информацию о процессе в пользовательское пространство
             if (copyout(p->pagetable, dest, (char*)&info, sizeof(info)) < 0) {
-                release(&proc[i].lock);
-                return -1;
+                release(&proc[i].lock);  // Освобождаем блокировку процесса
+                return -1;  // Возвращаем ошибку, если копирование не удалось
             }
-            copied++;
+            
+            copied++;  // Увеличиваем счетчик скопированных процессов
         }
 
-        release(&proc[i].lock);
+        release(&proc[i].lock);  // Освобождаем блокировку процесса
     }
 
-    return total;
+    return total;  // Возвращаем общее количество процессов
 }
