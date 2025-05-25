@@ -28,48 +28,62 @@ struct spinlock wait_lock;
 
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
-// guard page.
+// guard page to catch stack overflows.
+//
+// Each process needs its own kernel stack when executing in kernel mode.
+// These stacks are allocated during kernel initialization.
 void
 proc_mapstacks(pagetable_t kpgtbl)
 {
   struct proc *p;
   
   for(p = proc; p < &proc[NPROC]; p++) {
+    // Allocate physical memory for the stack
     char *pa = kalloc();
     if(pa == 0)
       panic("kalloc");
+    // Calculate virtual address for this process's kernel stack
+    // Each stack gets a unique virtual address
     uint64 va = KSTACK((int) (p - proc));
+    // Map the virtual address to the physical memory in kernel page table
+    // with read and write permissions
     kvmmap(kpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
   }
 }
 
-// initialize the proc table.
+// Initialize the process table and process locks.
+// Called once during kernel initialization.
 void
 procinit(void)
 {
   struct proc *p;
   
-  initlock(&pid_lock, "nextpid");
-  initlock(&wait_lock, "wait_lock");
+  // Initialize global locks
+  initlock(&pid_lock, "nextpid");   // Protects the nextpid variable
+  initlock(&wait_lock, "wait_lock"); // Protects parent-child relationships
+  
+  // Initialize each process structure
   for(p = proc; p < &proc[NPROC]; p++) {
-      initlock(&p->lock, "proc");
-      p->state = UNUSED;
+      initlock(&p->lock, "proc");   // Per-process lock
+      p->state = UNUSED;            // Mark all processes as free initially
+      // Set kernel stack virtual address (physical memory allocated later)
       p->kstack = KSTACK((int) (p - proc));
   }
 }
 
-// Must be called with interrupts disabled,
-// to prevent race with process being moved
-// to a different CPU.
+// Return the ID of the current CPU.
+// Must be called with interrupts disabled to avoid races,
+// as the process might be moved to a different CPU.
 int
 cpuid()
 {
+  // In RISC-V, the tp register holds the CPU ID (hart ID)
   int id = r_tp();
   return id;
 }
 
-// Return this CPU's cpu struct.
-// Interrupts must be disabled.
+// Return a pointer to the current CPU's cpu structure.
+// Interrupts must be disabled to prevent races.
 struct cpu*
 mycpu(void)
 {
@@ -78,31 +92,45 @@ mycpu(void)
   return c;
 }
 
-// Return the current struct proc *, or zero if none.
+// Return a pointer to the current process.
+// Returns zero if no process is running on this CPU.
+// This is a key function used throughout the kernel to
+// access the current process's data.
 struct proc*
 myproc(void)
 {
+  // Disable interrupts to ensure atomic access
   push_off();
+  // Get the current CPU
   struct cpu *c = mycpu();
+  // Get the process running on this CPU
   struct proc *p = c->proc;
+  // Re-enable interrupts
   pop_off();
   return p;
 }
 
+// Allocate a new process ID.
+// This function ensures that each process gets a unique PID.
 int
 allocpid()
 {
   int pid;
   
+  // Acquire lock to ensure atomic access to nextpid
   acquire(&pid_lock);
+  // Get the next available PID
   pid = nextpid;
+  // Increment for the next process
   nextpid = nextpid + 1;
+  // Release the lock
   release(&pid_lock);
 
   return pid;
 }
 
-// Look in the process table for an UNUSED proc.
+// Allocate and initialize a new process structure.
+// This is a key function used when creating new processes (fork, userinit).
 // If found, initialize state required to run in the kernel,
 // and return with p->lock held.
 // If there are no free procs, or a memory allocation fails, return 0.
@@ -111,6 +139,7 @@ allocproc(void)
 {
   struct proc *p;
 
+  // Search for an UNUSED process slot
   for(p = proc; p < &proc[NPROC]; p++) {
     acquire(&p->lock);
     if(p->state == UNUSED) {
@@ -119,20 +148,22 @@ allocproc(void)
       release(&p->lock);
     }
   }
-  return 0;
+  return 0;  // No free process slots available
 
 found:
-  p->pid = allocpid();
-  p->state = USED;
+  // Initialize process state
+  p->pid = allocpid();  // Assign a new process ID
+  p->state = USED;      // Mark as allocated but not runnable yet
 
-  // Allocate a trapframe page.
+  // Allocate memory for the trapframe
+  // The trapframe stores user registers during system calls/interrupts
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
   }
 
-  // An empty user page table.
+  // Create an empty user page table for the process
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
     freeproc(p);
@@ -140,61 +171,68 @@ found:
     return 0;
   }
 
-  // Set up new context to start executing at forkret,
-  // which returns to user space.
+  // Set up kernel context for the new process
+  // When this process is scheduled, it will start executing at forkret()
   memset(&p->context, 0, sizeof(p->context));
-  p->context.ra = (uint64)forkret;
-  p->context.sp = p->kstack + PGSIZE;
+  p->context.ra = (uint64)forkret;  // Return address points to forkret
+  p->context.sp = p->kstack + PGSIZE;  // Stack pointer at top of kernel stack
 
-  return p;
+  return p;  // Return with p->lock still held
 }
 
-// free a proc structure and the data hanging from it,
-// including user pages.
-// p->lock must be held.
+// Free a process structure and all associated resources.
+// Called when a process exits or is killed.
+// p->lock must be held by the caller.
 static void
 freeproc(struct proc *p)
 {
+  // Free the trapframe memory
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  
+  // Free the page table and all user memory
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
-  p->sz = 0;
-  p->pid = 0;
-  p->parent = 0;
-  p->name[0] = 0;
-  p->chan = 0;
-  p->killed = 0;
-  p->xstate = 0;
-  p->state = UNUSED;
+  
+  // Reset all process fields to default values
+  p->sz = 0;            // Process memory size
+  p->pid = 0;           // Process ID
+  p->parent = 0;        // Parent process
+  p->name[0] = 0;       // Process name
+  p->chan = 0;          // Sleep channel
+  p->killed = 0;        // Kill flag
+  p->xstate = 0;        // Exit status
+  p->state = UNUSED;    // Mark slot as available
 }
 
-// Create a user page table for a given process, with no user memory,
-// but with trampoline and trapframe pages.
+// Create a user page table for a given process.
+// This creates the initial page table with no user memory,
+// but with the essential trampoline and trapframe pages that
+// enable transitions between user and kernel mode.
 pagetable_t
 proc_pagetable(struct proc *p)
 {
   pagetable_t pagetable;
 
-  // An empty page table.
+  // Create an empty page table structure
   pagetable = uvmcreate();
   if(pagetable == 0)
     return 0;
 
-  // map the trampoline code (for system call return)
-  // at the highest user virtual address.
-  // only the supervisor uses it, on the way
-  // to/from user space, so not PTE_U.
+  // Map the trampoline code at the highest user virtual address.
+  // The trampoline contains code for transitioning between user and kernel mode.
+  // It's mapped without PTE_U because only the kernel needs to execute it.
   if(mappages(pagetable, TRAMPOLINE, PGSIZE,
               (uint64)trampoline, PTE_R | PTE_X) < 0){
     uvmfree(pagetable, 0);
     return 0;
   }
 
-  // map the trapframe page just below the trampoline page, for
-  // trampoline.S.
+  // Map the trapframe page just below the trampoline page.
+  // The trapframe stores user registers during system calls and interrupts.
+  // It's accessible by both user and kernel code.
   if(mappages(pagetable, TRAPFRAME, PGSIZE,
               (uint64)(p->trapframe), PTE_R | PTE_W) < 0){
     uvmunmap(pagetable, TRAMPOLINE, 1, 0);
@@ -205,56 +243,73 @@ proc_pagetable(struct proc *p)
   return pagetable;
 }
 
-// Free a process's page table, and free the
-// physical memory it refers to.
+// Free a process's page table and all associated physical memory.
+// This is called when a process exits to clean up its resources.
+// First unmaps special pages (trampoline and trapframe), then
+// frees all user memory and the page table itself.
 void
 proc_freepagetable(pagetable_t pagetable, uint64 sz)
 {
+  // Unmap the trampoline page (without freeing physical memory since it's shared)
   uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+  
+  // Unmap the trapframe page (without freeing physical memory, handled by freeproc)
   uvmunmap(pagetable, TRAPFRAME, 1, 0);
+  
+  // Free all user memory pages and page table pages
   uvmfree(pagetable, sz);
 }
 
-// a user program that calls exec("/init")
-// assembled from ../user/initcode.S
-// od -t xC ../user/initcode
+// Binary code for the first user process (init)
+// This is the compiled machine code from ../user/initcode.S
+// It's a small program that executes the exec("/init") system call
+// to load the real init program from the file system
 uchar initcode[] = {
-  0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02,
-  0x97, 0x05, 0x00, 0x00, 0x93, 0x85, 0x35, 0x02,
-  0x93, 0x08, 0x70, 0x00, 0x73, 0x00, 0x00, 0x00,
-  0x93, 0x08, 0x20, 0x00, 0x73, 0x00, 0x00, 0x00,
-  0xef, 0xf0, 0x9f, 0xff, 0x2f, 0x69, 0x6e, 0x69,
-  0x74, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00
+  0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02, // auipc a0, 0; addi a0, a0, 0x44
+  0x97, 0x05, 0x00, 0x00, 0x93, 0x85, 0x35, 0x02, // auipc a1, 0; addi a1, a1, 0x35
+  0x93, 0x08, 0x70, 0x00, 0x73, 0x00, 0x00, 0x00, // li a7, SYS_exec; ecall
+  0x93, 0x08, 0x20, 0x00, 0x73, 0x00, 0x00, 0x00, // li a7, SYS_exit; ecall
+  0xef, 0xf0, 0x9f, 0xff, 0x2f, 0x69, 0x6e, 0x69, // jal -4; "/ini"
+  0x74, 0x00, 0x00, 0x24, 0x00, 0x00, 0x00, 0x00, // "t\0"; address of "/init\0"
+  0x00, 0x00, 0x00, 0x00                          // NULL terminator for argv[]
 };
 
-// Set up first user process.
+// Set up the first user process (init).
+// This is called once during kernel initialization.
+// It creates the first process that will run the init program.
 void
 userinit(void)
 {
   struct proc *p;
 
+  // Allocate and initialize a process structure
   p = allocproc();
+  // Save a pointer to this process as the init process
+  // The init process is special - it becomes the parent of orphaned processes
   initproc = p;
   
-  // allocate one user page and copy initcode's instructions
-  // and data into it.
+  // Set up the initial program for the init process
+  // This loads the initcode array into the process's address space
   uvmfirst(p->pagetable, initcode, sizeof(initcode));
-  p->sz = PGSIZE;
+  p->sz = PGSIZE;  // Process size is one page
 
-  // prepare for the very first "return" from kernel to user.
-  p->trapframe->epc = 0;      // user program counter
-  p->trapframe->sp = PGSIZE;  // user stack pointer
+  // Set up the initial user-mode registers
+  p->trapframe->epc = 0;      // Start execution at virtual address 0
+  p->trapframe->sp = PGSIZE;  // Stack starts at the top of the memory
 
+  // Set process name and current working directory
   safestrcpy(p->name, "initcode", sizeof(p->name));
-  p->cwd = namei("/");
+  p->cwd = namei("/");  // Root directory
 
+  // Mark the process as ready to run
   p->state = RUNNABLE;
 
+  // Release the process lock so it can be scheduled
   release(&p->lock);
 }
 
-// Grow or shrink user memory by n bytes.
+// Grow or shrink the process memory size.
+// Used by the sbrk() system call and exec().
 // Return 0 on success, -1 on failure.
 int
 growproc(int n)
@@ -262,66 +317,89 @@ growproc(int n)
   uint64 sz;
   struct proc *p = myproc();
 
+  // Get current size
   sz = p->sz;
+  
   if(n > 0){
+    // Grow process memory
+    // Allocate new memory and map it into the process's address space
+    // PTE_W flag makes the memory writable
     if((sz = uvmalloc(p->pagetable, sz, sz + n, PTE_W)) == 0) {
+      // Failed to allocate memory
       return -1;
     }
   } else if(n < 0){
+    // Shrink process memory
+    // Deallocate memory from the process's address space
     sz = uvmdealloc(p->pagetable, sz, sz + n);
   }
+  
+  // Update the process size
   p->sz = sz;
   return 0;
 }
 
-// Create a new process, copying the parent.
-// Sets up child kernel stack to return as if from fork() system call.
+// Create a new process by duplicating the current one.
+// This implements the fork() system call.
+// Returns the child PID in the parent, 0 in the child, or -1 on error.
 int
 fork(void)
 {
   int i, pid;
-  struct proc *np;
-  struct proc *p = myproc();
+  struct proc *np;            // New process
+  struct proc *p = myproc();  // Current (parent) process
 
-  // Allocate process.
+  // Allocate and initialize a new process structure
   if((np = allocproc()) == 0){
-    return -1;
+    return -1;  // No free process slots or memory allocation failed
   }
 
-  // Copy user memory from parent to child.
+  // Copy the parent's memory to the child
+  // This creates an exact duplicate of the parent's address space
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
     freeproc(np);
     release(&np->lock);
-    return -1;
+    return -1;  // Memory copy failed
   }
-  np->sz = p->sz;
+  np->sz = p->sz;  // Set child size to match parent
 
-  // copy saved user registers.
+  // Copy the parent's trapframe to the child
+  // This includes all user registers
   *(np->trapframe) = *(p->trapframe);
 
-  // Cause fork to return 0 in the child.
+  // Make fork() return 0 in the child process
+  // In RISC-V, a0 register holds the return value
   np->trapframe->a0 = 0;
 
-  // increment reference counts on open file descriptors.
+  // Copy open file descriptors from parent to child
+  // This allows the child to access the same files
   for(i = 0; i < NOFILE; i++)
     if(p->ofile[i])
-      np->ofile[i] = filedup(p->ofile[i]);
+      np->ofile[i] = filedup(p->ofile[i]);  // Increment reference count
+      
+  // Set child's current working directory
   np->cwd = idup(p->cwd);
 
+  // Copy the parent's name to the child
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  // Remember the child's PID for return value to parent
   pid = np->pid;
 
+  // Release child's lock temporarily
   release(&np->lock);
 
+  // Set up parent-child relationship
   acquire(&wait_lock);
-  np->parent = p;
+  np->parent = p;  // Set child's parent pointer
   release(&wait_lock);
 
+  // Mark child as ready to run
   acquire(&np->lock);
   np->state = RUNNABLE;
   release(&np->lock);
 
+  // Return child's PID to the parent
   return pid;
 }
 

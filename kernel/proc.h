@@ -1,10 +1,12 @@
 // Saved registers for kernel context switches.
+// When switching from one process to another, these registers
+// need to be saved and restored to resume execution correctly.
 struct context {
-  uint64 ra;
-  uint64 sp;
+  uint64 ra;   // Return address (ra) register
+  uint64 sp;   // Stack pointer (sp) register
 
-  // callee-saved
-  uint64 s0;
+  // RISC-V callee-saved registers that must be preserved across function calls
+  uint64 s0;   // Also frame pointer (fp)
   uint64 s1;
   uint64 s2;
   uint64 s3;
@@ -18,28 +20,34 @@ struct context {
   uint64 s11;
 };
 
-// Per-CPU state.
+// Per-CPU state - each CPU has its own instance of this structure
 struct cpu {
-  struct proc *proc;          // The process running on this cpu, or null.
-  struct context context;     // swtch() here to enter scheduler().
-  int noff;                   // Depth of push_off() nesting.
+  struct proc *proc;          // The process currently running on this CPU, or null if idle
+  struct context context;     // When switching to scheduler(), save context here
+  int noff;                   // Depth of push_off() nesting (for interrupt disabling)
   int intena;                 // Were interrupts enabled before push_off()?
 };
 
+// Array of CPU structures, one per CPU in the system
 extern struct cpu cpus[NCPU];
 
-// per-process data for the trap handling code in trampoline.S.
-// sits in a page by itself just under the trampoline page in the
-// user page table. not specially mapped in the kernel page table.
-// uservec in trampoline.S saves user registers in the trapframe,
-// then initializes registers from the trapframe's
-// kernel_sp, kernel_hartid, kernel_satp, and jumps to kernel_trap.
-// usertrapret() and userret in trampoline.S set up
-// the trapframe's kernel_*, restore user registers from the
-// trapframe, switch to the user page table, and enter user space.
-// the trapframe includes callee-saved user registers like s0-s11 because the
-// return-to-user path via usertrapret() doesn't return through
-// the entire kernel call stack.
+// Trapframe: per-process data for trap handling code in trampoline.S.
+// This structure facilitates the transition between user and kernel mode.
+// It's located in a dedicated page just below the trampoline page in the
+// user page table, but not mapped in the kernel page table.
+//
+// When a trap occurs:
+// 1. uservec in trampoline.S saves all user registers in this trapframe
+// 2. It then loads kernel_sp, kernel_hartid, kernel_satp from the trapframe
+// 3. It switches to the kernel page table and jumps to usertrap()
+//
+// When returning to user space:
+// 1. usertrapret() and userret in trampoline.S set up kernel_* fields
+// 2. They restore user registers from the trapframe
+// 3. They switch to the user page table and return to user space
+//
+// The trapframe includes all callee-saved registers because the return path
+// to user space doesn't go through the normal kernel call stack unwinding.
 struct trapframe {
   /*   0 */ uint64 kernel_satp;   // kernel page table
   /*   8 */ uint64 kernel_sp;     // top of process's kernel stack
@@ -79,29 +87,37 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
-enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+// Process states in the xv6 operating system
+enum procstate {
+  UNUSED,    // Process slot is free
+  USED,      // Process is allocated but not ready
+  SLEEPING,  // Process is sleeping (waiting for an event)
+  RUNNABLE,  // Process is ready to run
+  RUNNING,   // Process is currently running on a CPU
+  ZOMBIE     // Process has terminated but not yet freed
+};
 
-// Per-process state
+// Per-process state - the core structure representing a process in xv6
 struct proc {
-  struct spinlock lock;
+  struct spinlock lock;        // Protects most fields in this structure
 
-  // p->lock must be held when using these:
-  enum procstate state;        // Process state
-  void *chan;                  // If non-zero, sleeping on chan
-  int killed;                  // If non-zero, have been killed
-  int xstate;                  // Exit status to be returned to parent's wait
-  int pid;                     // Process ID
+  // Fields that require p->lock to be held when accessing:
+  enum procstate state;        // Current process state
+  void *chan;                  // If sleeping, the channel (event) it's waiting on
+  int killed;                  // Set to non-zero if process should be killed
+  int xstate;                  // Exit status code to be returned to parent's wait()
+  int pid;                     // Process identifier
 
-  // wait_lock must be held when using this:
-  struct proc *parent;         // Parent process
+  // Fields that require wait_lock to be held:
+  struct proc *parent;         // Parent process (for wait() and inheritance)
 
-  // these are private to the process, so p->lock need not be held.
-  uint64 kstack;               // Virtual address of kernel stack
-  uint64 sz;                   // Size of process memory (bytes)
-  pagetable_t pagetable;       // User page table
-  struct trapframe *trapframe; // data page for trampoline.S
-  struct context context;      // swtch() here to run process
-  struct file *ofile[NOFILE];  // Open files
-  struct inode *cwd;           // Current directory
-  char name[16];               // Process name (debugging)
+  // Fields that are private to the process (no lock needed):
+  uint64 kstack;               // Virtual address of this process's kernel stack
+  uint64 sz;                   // Size of process memory in bytes
+  pagetable_t pagetable;       // Page table for this process's address space
+  struct trapframe *trapframe; // Saved user registers during system calls/interrupts
+  struct context context;      // Saved kernel context for context switching
+  struct file *ofile[NOFILE];  // Open file descriptors
+  struct inode *cwd;           // Current working directory
+  char name[16];               // Process name (for debugging)
 };
